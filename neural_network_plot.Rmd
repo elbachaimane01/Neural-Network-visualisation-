@@ -1,0 +1,453 @@
+---
+title: "Neural network visualisation"
+output: html_document
+---
+
+
+The goal of this assignement is the visualisation of neural networks. This plotting function is based on neural networks with the nnet or neuralnet functions, it also works with numeric weight functions.
+
+#Primary functions
+
+##tests functions
+This function tests the input parameters 
+```{r}
+tests<-function(model,struct){
+  ###
+  #tests the input parameters 
+  #
+  #PARAMETERS
+  #----------
+  #model: neural network object or numeric vector of weights
+  #struct:numeric value of length three 
+  #indicating network architecture(no. nodes for input,  hidden,output)
+  ###
+  
+  if('numeric' %in% class(model)){
+    if(is.null(struct)) stop('Three-element vector required for struct')
+    if(length(model) != ((struct[1]*struct[2]+struct[2]*struct[3])+(struct[3]+struct[2])))
+      stop('Incorrect length of weight matrix for given network structure')
+  }
+  if('train' %in% class(model)){
+    if('nnet' %in% class(model$finalModel)){
+      model<-model$finalModel
+      warning('Using best nnet model from train output')
+    }
+    else stop('Only nnet method can be used with train object')
+  }
+}
+```
+
+
+##Weight extraction
+The following function extracts the weights from the models 
+
+```{r}
+weight_extraction<-function(model,nid,width,struct.out=struct){
+  ###
+  #Returns the weight matrix from the neural network model,output is list
+  #
+  #PARAMETERS
+  #----------
+  #model: neural network object or numeric vector of weights
+  #Width: The maximum width of connection lines 
+  #struct.out:numeric value of length three indicating network architecture(no. nodes for input,  hidden,output), required only if mod.in is a numeric vector 
+  ###
+  require(reshape)
+  require(scales)
+  
+  #first case: model is a weight matrix  
+  if('numeric' %in% class(model)){
+      wts<-model
+  }
+  #Second case: neuralnet function
+  if('nn' %in% class(model)){
+    struct.out<-unlist(lapply(model$weights[[1]],ncol))
+    struct.out<-struct.out[-length(struct.out)]
+    struct.out<-c(
+    	length(model$model.list$variables),
+    	struct.out,
+    	length(model$model.list$response)
+    	)    		
+    wts<-unlist(model$weights[[1]])   
+    }
+  #Third case: nnet package
+  if('nnet' %in% class(model)){
+    struct.out<-model$n
+    wts<-model$wts
+  }
+  
+  #rescale
+  if(nid) wts<-rescale(abs(wts),c(1,width))
+  
+  #convert wts to list with appropriate names 
+  hid.struct<-struct.out[-c(length(struct.out))]
+  row.nms<-NULL
+  for(i in 1:length(hid.struct)){
+    if(is.na(hid.struct[i+1])) break
+    row.nms<-c(row.nms,rep(paste('hidden',i,seq(1:hid.struct[i+1])),each=1+hid.struct[i]))
+  }
+  row.nms<-c(
+    row.nms,
+    rep(paste('out',seq(1:struct.out[length(struct.out)])),each=1+struct.out[length(struct.out)-1])
+  )
+  out.ls<-data.frame(wts,row.nms)
+  out.ls$row.nms<-factor(row.nms,levels=unique(row.nms),labels=unique(row.nms))
+  out.ls<-split(out.ls$wts,f=out.ls$row.nms)
+    
+  assign('struct',struct.out,envir=.GlobalEnv)
+
+  out.ls 
+    
+  }
+```
+
+
+
+##Variables names
+```{r}
+Variable_names<-function(model,struct,x.lab,y.lab){
+  #get variable names from model object
+  #change to user input if supplied
+  #
+  #PARAMETERS 
+  #----------
+  #model: neural network object or numeric vector of weights
+  #struct: the architecture of the neural network 
+  #x.lab/y.lab: user input for variable names 
+  
+  if('numeric' %in% class(model)){
+    x.names<<-paste0(rep('X',struct[1]),seq(1:struct[1]))
+    y.names<<-paste0(rep('Y',struct[3]),seq(1:struct[3]))
+  }
+  if('nn' %in% class(model)){
+    x.names<<-model$model.list$variables
+    y.names<<-model$model.list$respons
+  }
+  if('xNames' %in% names(model)){
+    x.names<<-model$xNames
+    y.names<<-attr(terms(model),'factor')
+    y.names<<-row.names(y.names)[!row.names(y.names) %in% x.names]
+  }
+  if(!'xNames' %in% names(model) & 'nnet' %in% class(model)){
+    if(is.null(model$call$formula)){
+      x.names<<-colnames(eval(model$call$x))
+      y.names<<-colnames(eval(model$call$y))
+    }
+    else{
+      forms<<-eval(model$call$formula)
+      x.names<<-model$coefnames
+      facts<<-attr(terms(model),'factors')
+      y.check<<-model$fitted
+      if(ncol(y.check)>1) y.names<<-colnames(y.check)
+      else y.names<<-as.character(forms)[2]
+    } 
+  }
+  #change variables names to user sub 
+  if(!is.null(x.lab)){
+    if(length(x.names) != length(x.lab)) 
+      stop('x.lab length not equal to number of input variables')
+    else x.names<<-x.lab
+  }
+  if(!is.null(y.lab)){
+    if(length(y.names) != length(y.lab)) 
+      stop('y.lab length not equal to number of output variables')
+    else y.names<<-y.lab
+  }
+}
+```
+
+## Plotting functions
+```{r}
+get.ys<-function(lyr){
+  #function for getting y locations for input, hidden, output layers
+  #input is integer value from 'struct'
+  spacing<-diff(c(0*diff(y.range),0.9*diff(y.range)))/max(struct)
+  
+  		seq(0.5*(diff(y.range)+spacing*(lyr-1)),0.5*(diff(y.range)-spacing*(lyr-1)),
+        length=lyr)
+  }
+```
+
+```{r}
+layer.points<-function(layer,x.loc,layer.name,cex){
+  #function for plotting nodes
+  #
+  #PARAMETERS
+  #---------
+  #cex: numeric value indicating size of text labels
+  #layer: specifies which layer, integer from 'struct'
+  #x.loc:indicates x location for layer, integer from 'layer.x'
+  #layer.name: is string indicating text to put in node
+  x<-rep(x.loc*diff(x.range),layer)
+  y<-get.ys(layer)
+  points(x,y,pch=21,cex=circle.cex,col=in.col,bg=bord.col)
+  text(x,y,paste(layer.name,1:layer,sep=''),cex=cex.val)
+  if(layer.name=='I' & var.labs) text(x-line.stag*diff(x.range),y,x.names,pos=2,cex=cex.val)      
+  if(layer.name=='O' & var.labs) text(x+line.stag*diff(x.range),y,y.names,pos=4,cex=cex.val)
+  }
+
+```
+
+```{r}
+bias.points<-function(bias.x,bias.y,layer.name,cex,...){
+  #function for plotting bias points
+  #'bias.x' is vector of values for x locations
+  #'bias.y' is vector for y location
+  #'layer.name' is  string indicating text to put in node
+  for(val in 1:length(bias.x)){
+    points(
+      diff(x.range)*bias.x[val],
+      bias.y*diff(y.range),
+      pch=21,col=in.col,bg=bord.col,cex=circle.cex
+    )
+     text(
+        diff(x.range)*bias.x[val],
+        bias.y*diff(y.range),
+        paste(layer.name,val,sep=''),
+        cex=cex.val
+      )
+  }
+}
+```
+
+```{r}
+layer.lines<-function(model,h.layer,layer1=1,layer2=2,out.layer=F,width,nid,pos.col,
+                        neg.col,...){
+  #function creates lines colored by direction and width as proportion of magnitude
+    
+    x0<-rep(layer.x[layer1]*diff(x.range)+line.stag*diff(x.range),struct[layer1])
+    x1<-rep(layer.x[layer2]*diff(x.range)-line.stag*diff(x.range),struct[layer1])
+    
+    if(out.layer==T){
+      
+      y0<-get.ys(struct[layer1])
+      y1<-rep(get.ys(struct[layer2])[h.layer],struct[layer1])
+      src.str<-paste('out',h.layer)
+      
+      wts<-weight_extraction(model,nid=F,width)
+      wts<-wts[grep(src.str,names(wts))][[1]][-1]
+      wts.rs<-weight_extraction(model,nid=T,width)
+      wts.rs<-wts.rs[grep(src.str,names(wts.rs))][[1]][-1]
+      
+      cols<-rep(pos.col,struct[layer1])
+      cols[wts<0]<-neg.col
+      
+      if(nid) segments(x0,y0,x1,y1,col=cols,lwd=wts.rs)
+      else segments(x0,y0,x1,y1)
+      
+    }
+    
+    else{
+      
+      y0<-rep(get.ys(struct[layer1])[h.layer],struct[2])
+      y1<-get.ys(struct[layer2])
+      src.str<-paste('hidden',layer1)
+      
+      wts<-weight_extraction(model,nid=F,width)
+      wts<-unlist(lapply(wts[grep(src.str,names(wts))],function(x) x[h.layer+1]))
+      wts.rs<-weight_extraction(model,nid=T,width)
+      wts.rs<-unlist(lapply(wts.rs[grep(src.str,names(wts.rs))],function(x) x[h.layer+1]))
+      
+      cols<-rep(pos.col,struct[layer2])
+      cols[wts<0]<-neg.col
+      
+      segments(x0,y0,x1,y1,col=cols,lwd=wts.rs)
+    }
+    
+  }
+
+```
+
+```{r}
+bias.lines<-function(bias.x,model,nid,width,pos.col,neg.col,circle.cex=5,...){
+  x.range<-c(0,100)
+  y.range<-c(0,100)
+  #these are all proportions from 0-1
+  line.stag<-0.011*circle.cex/2
+  layer.x<-seq(0.17,0.9,length=length(struct))
+  bias.x<-layer.x[-length(layer.x)]+diff(layer.x)/2
+  bias.y<-0.95
+  circle.cex<-circle.cex
+  all.out<-1:struct[length(struct)]
+    
+  for(val in 1:length(bias.x)){
+    wts<-weight_extraction(model,nid=F,width)
+    wts.rs<-weight_extraction(model,nid=T,width)
+    if(val != length(bias.x)){
+      wts<-wts[grep('out',names(wts),invert=T)]
+      wts.rs<-wts.rs[grep('out',names(wts.rs),invert=T)]
+    	sel.val<-grep(val,substr(names(wts.rs),8,8))
+    	wts<-wts[sel.val]
+    	wts.rs<-wts.rs[sel.val]
+    }
+    
+    else{
+      wts<-wts[grep('out',names(wts))]
+      wts.rs<-wts.rs[grep('out',names(wts.rs))]
+    }
+      
+    cols<-rep(pos.col,length(wts))
+    cols[unlist(lapply(wts,function(x) x[1]))<0]<-neg.col
+    wts.rs<-unlist(lapply(wts.rs,function(x) x[1]))
+      
+    if(nid==F){
+      wts.rs<-rep(1,struct[val+1])
+      cols<-rep('black',struct[val+1])
+    }
+  
+    if(val != length(bias.x)){
+      segments(
+        rep(diff(x.range)*bias.x[val]+diff(x.range)*line.stag,struct[val+1]),
+        rep(bias.y*diff(y.range),struct[val+1]),
+        rep(diff(x.range)*layer.x[val+1]-diff(x.range)*line.stag,struct[val+1]),
+        get.ys(struct[val+1]),
+        lwd=wts.rs,
+        col=cols
+      )
+    }
+      
+    else{
+      segments(
+        rep(diff(x.range)*bias.x[val]+diff(x.range)*line.stag,struct[val+1]),
+        rep(bias.y*diff(y.range),struct[val+1]),
+        rep(diff(x.range)*layer.x[val+1]-diff(x.range)*line.stag,struct[val+1]),
+        get.ys(struct[val+1])[all.out],
+        lwd=wts.rs[all.out],
+        col=cols[all.out]
+      )
+    }
+      
+  }
+}
+```
+
+
+
+
+#Main program 
+```{r}
+neural_network_plot<- function(model,struct1=NULL,nid=T,bias=T,width=5,circle.cex=5,
+                     var.labs=T,x.lab=NULL,y.lab=NULL,cex.val=1, wts.only=F,alpha.val=1,
+                     circle.col='lightblue',pos.col='blue',neg.col='grey', ...){
+  require(scales)
+  cex.val<<-cex.val
+  var.labs<<-var.labs
+  #1) Tests:
+  tests(model,struct=struct1)
+  
+  #2) Weight extraction:
+  wts<-weight_extraction(model,nid,width,struct.out=struct1)
+  if(wts.only) return(wts)
+  #3)Colors:
+  ##circle colors for input, if desired, must be two-vector list, first vector is for input layer
+  if(is.list(circle.col)){
+                    circle.col.inp<-circle.col[[1]]
+                    circle.col<-circle.col[[2]]
+                    }
+  else circle.col.inp<-circle.col
+  
+  #4) initiate plotting
+  x.range<<-c(0,100)
+  y.range<<-c(0,100)
+  #these are all proportions from 0-1
+  line.stag<<-0.011*circle.cex/2
+  layer.x<<-seq(0.17,0.9,length=length(struct))
+  bias.x<<-layer.x[-length(layer.x)]+diff(layer.x)/2
+  bias.y<<-0.95
+  circle.cex<<-circle.cex
+  
+  #5) Variable names 
+  Variable_names(model,struct,x.lab,y.lab)
+  
+  #6) initiate plot 
+  plot(x.range,y.range,type='n',axes=F,ylab='',xlab='',...)
+  
+  #7) biais lines 
+  if(bias) bias.lines(bias.x,model,nid=nid,width=width,pos.col=alpha(pos.col,alpha.val),
+                      neg.col=alpha(neg.col,alpha.val))
+  
+  
+  #8)Layer lines
+  mapply(
+      function(x) layer.lines(model,x,layer1=1,layer2=2,nid=nid,width=width,
+                              pos.col=alpha(pos.col,alpha.val),neg.col=alpha(neg.col,alpha.val)),
+      1:struct[1]
+  )
+  
+  #9): connections between hidden layers
+  lays<-split(c(1,rep(2:(length(struct)-1),each=2),length(struct)),
+              f=rep(1:(length(struct)-1),each=2))
+  lays<-lays[-c(1,(length(struct)-1))]
+  for(lay in lays){
+    for(node in 1:struct[lay[1]]){
+      layer.lines(model,node,layer1=lay[1],layer2=lay[2],nid=nid,width=width,
+                  pos.col=alpha(pos.col,alpha.val),neg.col=alpha(neg.col,alpha.val))
+    }
+  }
+  
+  #10) lines for hidden-output
+  mapply(
+    function(x) layer.lines(model,x,layer1=length(struct)-1,layer2=length(struct),out.layer=T,nid=nid,
+                            width=width,
+                            pos.col=alpha(pos.col,alpha.val),neg.col=alpha(neg.col,alpha.val)),
+    1:struct[length(struct)]
+  )
+  
+  #use functions to plot nodes
+  for(i in 1:length(struct)){
+    bord.col<<-circle.col
+    in.col<<-bord.col
+    layer.name<-'H'
+    if(i==1) { layer.name<-'I'; in.col<<-bord.col<<-circle.col.inp}
+    if(i==length(struct)) layer.name<-'O'
+    layer.points(struct[i],layer.x[i],layer.name)
+    }
+
+  if(bias) bias.points(bias.x,bias.y,'B')
+}
+```
+
+
+
+
+
+#TEST:
+
+```{r}
+library(clusterGeneration)
+ 
+seed.val<-2
+set.seed(seed.val)
+ 
+num.vars<-8
+num.obs<-1000
+ 
+#input variables
+cov.mat<-genPositiveDefMat(num.vars,covMethod=c("unifcorrmat"))$Sigma
+rand.vars<-mvrnorm(num.obs,rep(0,num.vars),Sigma=cov.mat)
+ 
+#output variables
+parms<-runif(num.vars,-10,10)
+y1<-rand.vars %*% matrix(parms) + rnorm(num.obs,sd=20)
+parms2<-runif(num.vars,-10,10)
+y2<-rand.vars %*% matrix(parms2) + rnorm(num.obs,sd=20)
+ 
+#final datasets
+rand.vars<-data.frame(rand.vars)
+resp<-data.frame(y1,y2)
+names(resp)<-c('Y1','Y2')
+dat.in<-data.frame(resp,rand.vars)
+```
+
+```{r}
+#nnet function from nnet package
+library(nnet)
+set.seed(seed.val)
+mod1<-nnet(rand.vars,resp,data=dat.in,size=6,linout=T)
+```
+```{r}
+neural_network_plot(mod1)
+```
+
+
+
